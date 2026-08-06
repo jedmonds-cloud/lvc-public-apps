@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import io
+import re
 from datetime import datetime, timezone
 from docx import Document
 from docx.shared import Pt, RGBColor, Inches, Cm
@@ -129,6 +130,40 @@ def ts_to_date(ts_str):
     except:
         return "—"
 
+def ts_to_datetime(ts_str):
+    if not ts_str:
+        return None
+    try:
+        return datetime.fromtimestamp(int(ts_str) / 1000, tz=timezone.utc)
+    except:
+        return None
+
+def build_filename(inc):
+    client = (inc.get("client") or "").strip()
+    task_id = (inc.get("id") or "").strip()
+    date_short = (inc.get("report_date_short") or "").strip()
+
+    if client in ("", "-", "—", "None"):
+        name_part = f"Unnamed Client {task_id}".strip()
+    else:
+        name_part = client
+
+    base = f"Incident Report - {name_part} ({date_short})"
+
+    # Strip characters Windows rejects in filenames
+    base = re.sub(r'[\\/:*?"<>|]', "", base)
+    # Collapse repeated spaces and underscores
+    base = re.sub(r" {2,}", " ", base)
+    base = re.sub(r"_{2,}", "_", base)
+    base = base.strip()
+
+    # Cap total length (including extension) at 150 characters
+    ext = ".docx"
+    if len(base) + len(ext) > 150:
+        base = base[: 150 - len(ext)].rstrip()
+
+    return base + ext
+
 def get_field(fields, name):
     for f in fields:
         if f["name"] == name:
@@ -196,6 +231,8 @@ def parse_incident(data):
     for f in cf:
         if f["name"] == "Lead" and f.get("value"):
             lead_list = [u["username"] for u in f["value"]] if isinstance(f["value"], list) else []
+    # Effective report date: Event Date & Time, falling back to date_created
+    event_dt = ts_to_datetime(get_field(cf, "Event Date & Time")) or ts_to_datetime(data.get("date_created"))
     return {
         "id": data["id"],
         "status": data.get("status", {}).get("status", "Unknown").title(),
@@ -226,6 +263,8 @@ def parse_incident(data):
         "date_ndis_notified": ts_to_date(get_field(cf, "Date NDIS Notified")),
         "ndis_ref": get_field(cf, "NDIS Reference No") or "—",
         "date_closed": ts_to_date(get_field(cf, "Date LVC Closed Incident")),
+        "report_date_short": event_dt.strftime("%d%b%y") if event_dt else "",
+        "report_date_long": f"{event_dt.day} {event_dt.strftime('%B %Y')}" if event_dt else "—",
     }
 
 # ── Word doc generator ────────────────────────────────────────────────────────
@@ -269,6 +308,10 @@ def add_table_row(table, label, value, row_idx):
 
 def generate_word(inc):
     doc = Document()
+    # Core document properties
+    doc.core_properties.title = f"Incident Report - {inc['client']} ({inc['report_date_short']})"
+    doc.core_properties.author = "La Vita Care"
+    doc.core_properties.subject = inc["id"]
     # Default style
     style = doc.styles['Normal']
     style.font.name = 'Calibri'
@@ -291,11 +334,18 @@ def generate_word(inc):
     title.paragraph_format.space_before = Pt(0)
 
     sub = doc.add_paragraph()
-    sr = sub.add_run("La Vita Care — Community Services")
+    sr = sub.add_run(f"{inc['client']} · {inc['report_date_long']}")
     sr.font.name = "Calibri"
     sr.font.size = Pt(11)
     sr.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
-    sub.paragraph_format.space_after = Pt(6)
+    sub.paragraph_format.space_after = Pt(2)
+
+    sub2 = doc.add_paragraph()
+    sr2 = sub2.add_run("La Vita Care, Community Services")
+    sr2.font.name = "Calibri"
+    sr2.font.size = Pt(10)
+    sr2.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+    sub2.paragraph_format.space_after = Pt(6)
 
     # Horizontal rule via paragraph border
     rule = doc.add_paragraph()
@@ -502,8 +552,7 @@ if st.button("Generate Report", type="primary", disabled=not (task_id and api_ke
 
         # ── Download ──
         st.divider()
-        client_slug = inc['client'].replace(" ", "_").replace("/", "-")
-        filename = f"Incident_{client_slug}_{inc['id']}.docx"
+        filename = build_filename(inc)
         word_buf = generate_word(inc)
         st.download_button(
             "⬇️ Download Word Report (.docx)",
