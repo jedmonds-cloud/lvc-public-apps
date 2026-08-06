@@ -2,11 +2,14 @@ import streamlit as st
 import requests
 import io
 import re
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from docx import Document
 from docx.shared import Pt, RGBColor, Inches, Cm
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+
+MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -126,7 +129,10 @@ def ts_to_date(ts_str):
         return "—"
     try:
         ts = int(ts_str) / 1000
-        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%-d %B %Y, %-I:%M%p").replace("AM","am").replace("PM","pm")
+        dt = datetime.fromtimestamp(ts, tz=MELBOURNE_TZ)
+        hour12 = int(dt.strftime("%I"))  # 1–12, no leading zero, portable
+        ampm = dt.strftime("%p").lower()
+        return f"{dt.day} {dt.strftime('%B %Y')}, {hour12}:{dt.strftime('%M')}{ampm}"
     except:
         return "—"
 
@@ -134,9 +140,15 @@ def ts_to_datetime(ts_str):
     if not ts_str:
         return None
     try:
-        return datetime.fromtimestamp(int(ts_str) / 1000, tz=timezone.utc)
+        return datetime.fromtimestamp(int(ts_str) / 1000, tz=MELBOURNE_TZ)
     except:
         return None
+
+def display_client(inc):
+    client = (inc.get("client") or "").strip()
+    if client in ("", "-", "—", "None"):
+        return "Unnamed Client"
+    return client
 
 def build_filename(inc):
     client = (inc.get("client") or "").strip()
@@ -148,10 +160,13 @@ def build_filename(inc):
     else:
         name_part = client
 
-    base = f"Incident Report - {name_part} ({date_short})"
+    if date_short:
+        base = f"Incident Report - {name_part} ({date_short})"
+    else:
+        base = f"Incident Report - {name_part}"
 
-    # Strip characters Windows rejects in filenames
-    base = re.sub(r'[\\/:*?"<>|]', "", base)
+    # Replace characters Windows rejects with a space (keeps word boundaries)
+    base = re.sub(r'[\\/:*?"<>|]', " ", base)
     # Collapse repeated spaces and underscores
     base = re.sub(r" {2,}", " ", base)
     base = re.sub(r"_{2,}", "_", base)
@@ -240,7 +255,7 @@ def parse_incident(data):
         "event_datetime": ts_to_date(get_field(cf, "Event Date & Time")),
         "event_location": get_field(cf, "Event Location") or "—",
         "service": get_dropdown_label(cf, "Service") or "—",
-        "client": get_field(cf, "Client") or "—",
+        "client": get_field(cf, "Client Name") or "—",
         "staff": get_field(cf, "Staff Name") or "—",
         "other_people": get_field(cf, "Other People Involved") or "—",
         "assignees": assignees or "—",
@@ -309,7 +324,7 @@ def add_table_row(table, label, value, row_idx):
 def generate_word(inc):
     doc = Document()
     # Core document properties
-    doc.core_properties.title = f"Incident Report - {inc['client']} ({inc['report_date_short']})"
+    doc.core_properties.title = f"Incident Report - {display_client(inc)} ({inc['report_date_short']})"
     doc.core_properties.author = "La Vita Care"
     doc.core_properties.subject = inc["id"]
     # Default style
@@ -334,7 +349,7 @@ def generate_word(inc):
     title.paragraph_format.space_before = Pt(0)
 
     sub = doc.add_paragraph()
-    sr = sub.add_run(f"{inc['client']} · {inc['report_date_long']}")
+    sr = sub.add_run(f"{display_client(inc)} · {inc['report_date_long']}")
     sr.font.name = "Calibri"
     sr.font.size = Pt(11)
     sr.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
