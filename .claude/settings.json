@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(python test_filename.py)",
-      "Bash(py test_filename.py)"
+      "Bash(py test_filename.py)",
+      "Bash(python -m py_compile app.py)",
+      "Bash(python -c \"import zoneinfo; from zoneinfo import ZoneInfo; ZoneInfo\\('Australia/Melbourne'\\); print\\('ZoneInfo Australia/Melbourne OK'\\)\")"
     ]
   }
 }
